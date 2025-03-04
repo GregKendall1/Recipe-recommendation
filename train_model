@@ -1,0 +1,60 @@
+
+import pandas as pd 
+from gensim.models import Word2Vec
+from gensim.parsing.preprocessing import remove_stopwords
+from nltk.stem import WordNetLemmatizer
+import numpy as np
+import os
+
+words_to_remove = ['diced','chopped','fresh','crumbled','peeled','approx','bonein','jar','roughly','sifted','chilled','shaved','frozen','cut','thawed','seeded','room','temperature','softened','melted','one','total','taste','breast','thigh','dried','rings','each','teaspoon','bag','drained','plus','needed','cooked','trimmed','piece','boneless','skinless','small','medium','large','sliced','about','cup','tbsp','freshly','cracked','can','strained','rinsed','crushed','tsp','lb','oz','ground','minced','lightly','whisked','chopped','optional','garnish','divided','uncooked','bunch','finely','shredded','cold','quartered']
+
+def clean_ingredients(ingredient,alphabetical=False):
+    """input string of ingredient and puts it in a standard form """
+    lemmatizer = WordNetLemmatizer()
+    ingredient_list = ingredient.split()    
+    ingredient_list = [''.join(filter(str.isalpha,ingred))for ingred in ingredient_list]    #remove non-alphabetical characters
+    ingredient_list = [ingred.lower() for ingred in ingredient_list if ingred]
+    ingredient_list = [lemmatizer.lemmatize(ingred) for ingred in ingredient_list]
+    ingredient_list = [ingred for ingred in ingredient_list if ingred not in words_to_remove]
+    ingredient_list = sorted(ingredient_list)
+    ingredient_list = [remove_stopwords(ingred) for ingred in ingredient_list]
+    cleaned_ingredient = ' '.join(ingredient_list)
+    return cleaned_ingredient
+
+def get_average(ingredients,w2v):
+    """Get average embedding of recipe given a trained model"""
+    ingredients = ingredients['ingredients']
+    ingredients = eval(ingredients)
+    value_list = []
+    ingredients = [clean_ingredients(ing) for ing in ingredients]
+    for ing in ingredients:
+        if ing in w2v.wv.index_to_key:
+            value_list.append(w2v.wv[ing])
+    if value_list:
+        ave = np.array(value_list).mean(axis=0)
+    else:
+        ave = np.zeros(w2v.wv.vector_size)
+    return ave
+
+
+def create_corpus(df):
+    """Cleans ingredients for each recipe and returns as list"""
+    ingredient_list = []
+    for i in range(df.shape[0]):
+        ing_list = eval(df['ingredients'].iloc[i])
+        ing_list = [clean_ingredients(ingredient) for ingredient in ing_list]
+        ingredient_list.append(ing_list)
+    return ingredient_list
+
+
+if __name__ == "__main__":
+    directory = os.getcwd()
+    df = pd.read_csv(directory+'\\data\\all_recipes')
+    ingredient_list = create_corpus(df)
+    w2v = Word2Vec(ingredient_list,vector_size = 300,window=5,workers=4,epochs=10,min_count=3)
+    w2v.save('model_w2v.bin')
+    df['average']=df.apply(get_average,axis=1,w2v=w2v)
+    df = df.dropna(subset=['average'],axis=0)
+    df = df.reset_index(drop=True)
+    df.to_json(directory+'\\data\\all_data_json',index = False)
+
