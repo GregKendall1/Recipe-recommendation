@@ -4,6 +4,7 @@ from gensim.models import Word2Vec
 from gensim.parsing.preprocessing import remove_stopwords
 from nltk.stem import WordNetLemmatizer
 import numpy as np
+import pickle
 import os
 
 words_to_remove = ['diced','chopped','fresh','crumbled','peeled','approx','bonein','jar','roughly','sifted','chilled','shaved','frozen','cut','thawed','seeded','room','temperature','softened','melted','one','total','taste','breast','thigh','dried','rings','each','teaspoon','bag','drained','plus','needed','cooked','trimmed','piece','boneless','skinless','small','medium','large','sliced','about','cup','tbsp','freshly','cracked','can','strained','rinsed','crushed','tsp','lb','oz','ground','minced','lightly','whisked','chopped','optional','garnish','divided','uncooked','bunch','finely','shredded','cold','quartered']
@@ -21,18 +22,43 @@ def clean_ingredients(ingredient,alphabetical=False):
     cleaned_ingredient = ' '.join(ingredient_list)
     return cleaned_ingredient
 
-def get_average(ingredients,w2v):
+def train_tfidf_model(df):
+    """Trains tfidf model to find frequencies of words"""
+    words = []
+    for i in range(df.shape[0]):
+        if type(df.loc[i,'ingredients']) == str:    
+            ing_list = eval(df.loc[i,'ingredients'])    #needs to make it into list 
+        else:
+            ing_list = df.loc[i,'ingredients']
+        ing_list = [clean_ingredients(ingredient) for ingredient in ing_list]
+        words.extend(ing_list)
+    tfidf = TfidfVectorizer()
+    fit_tfidf = tfidf.fit_transform(words)
+    directory = os.getcwd()
+    with open( directory +"\\vectorizer.pickle", 'wb') as handle:
+        pickle.dump(tfidf, handle, protocol=pickle.HIGHEST_PROTOCOL) 
+    max_idf = max(tfidf.idf_) 
+    values = defaultdict(lambda: max_idf,
+    [(word, tfidf.idf_[i]) for word, i in tfidf.vocabulary_.items()])
+    return values  
+
+def get_average(ingredients,w2v,values,weighted = True):
     """Get average embedding of recipe given a trained model"""
     ingredients = ingredients['ingredients']
-    ingredients = eval(ingredients)
+    if type(ingredients) == str:
+        ingredients = eval(ingredients)
     value_list = []
     ingredients = [clean_ingredients(ing) for ing in ingredients]
     for ing in ingredients:
         if ing in w2v.wv.index_to_key:
-            value_list.append(w2v.wv[ing])
+            if weighted:
+                for x in ing.split():
+                    value_list.append(w2v.wv[ing]*values[x])
+            else:
+                value_list.append(w2v.wv[ing])
     if value_list:
         ave = np.array(value_list).mean(axis=0)
-    else:
+    else:       #if ingredient not found in corpus, set to zero
         ave = np.zeros(w2v.wv.vector_size)
     return ave
 
@@ -53,7 +79,8 @@ if __name__ == "__main__":
     ingredient_list = create_corpus(df)
     w2v = Word2Vec(ingredient_list,vector_size = 300,window=5,workers=4,epochs=10,min_count=3)
     w2v.save('model_w2v.bin')
-    df['average']=df.apply(get_average,axis=1,w2v=w2v)
+    values = train_tfidf_model(df2) 
+    df2['average']=df2.apply(get_average,axis=1,w2v=w2v,values = values,weighted = True)
     df = df.dropna(subset=['average'],axis=0)
     df = df.reset_index(drop=True)
     df.to_json(directory+'\\data\\all_data_json',index = False)
