@@ -1,15 +1,13 @@
 from dash import Dash, html, dcc, callback, Output, Input, State, dash_table,ctx
 import dash_bootstrap_components as dbc
 import pandas as pd
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+import pickle
 import os
+from sklearn.metrics.pairwise import cosine_similarity
 from nltk.stem import WordNetLemmatizer
 from gensim.models import KeyedVectors
 from gensim.parsing.preprocessing import remove_stopwords
-
-#need to remove words from input in order to use w2v model
-words_to_remove = ['diced','chopped','fresh','crumbled','peeled','approx','bonein','jar','roughly','sifted','chilled','shaved','frozen','cut','thawed','seeded','room','temperature','softened','melted','one','total','taste','breast','thigh','dried','rings','each','teaspoon','bag','drained','plus','needed','cooked','trimmed','piece','boneless','skinless','small','medium','large','sliced','about','cup','tbsp','freshly','cracked','can','strained','rinsed','crushed','tsp','lb','oz','ground','minced','lightly','whisked','chopped','optional','garnish','divided','uncooked','bunch','finely','shredded','cold','quartered']
 
 def get_data():
     """Gets dataframe with recipe data and model"""
@@ -48,8 +46,26 @@ def clean_ingredients(ingredient,alphabetical=False):
     cleaned_ingredient = ' '.join(ingredient_list)
     return cleaned_ingredient
 
-def get_average(ingredients):
-    """Get average embedding of ingredient which is inputted by user"""
+def load_tfidf_model(df):
+    """Loads tfidf model and creates dictionary of values for each word in corpus"""
+    words = []
+    for i in range(df.shape[0]):
+        if type(df.loc[i,'ingredients']) == str:    
+            ing_list = eval(df.loc[i,'ingredients'])    #needs to make it into list 
+        else:
+            ing_list = df.loc[i,'ingredients']
+        ing_list = [clean_ingredients(ingredient) for ingredient in ing_list]
+        words.extend(ing_list)
+    directory = os.getcwd()
+    with open(directory+"\\vectorizer.pickle", 'rb') as handle:
+        tfidf = pickle.load(handle)
+    max_idf = max(tfidf.idf_) 
+    values = defaultdict(lambda: max_idf,
+    [(word, tfidf.idf_[i]) for word, i in tfidf.vocabulary_.items()])
+    return values  
+    
+def get_weighted_average(ingredients,values,weighted = True):
+    """Gets the weighted average embedding of ingredient, weighted by tfidf if weighted is true"""
     value_list = []
     user_input = ingredients        
     ingredients = [clean_ingredients(ing,alphabetical=True) for ing in ingredients]
@@ -57,18 +73,21 @@ def get_average(ingredients):
         ingredients.extend([x for x in w2v.wv.key_to_index if ing in x.split()])        #includes all appearances of word in ingredients 
     for ing in ingredients:
         if ing in w2v.wv.index_to_key:
-            value_list.append(w2v.wv[ing])
+            if weighted:
+                for x in ing:
+                    value_list.append(w2v.wv[ing]*values[x])
+            else:
+                value_list.append(w2v.wv[ing])
     if value_list:
         ave = np.array(value_list).mean(axis=0)
     else:                                       #if none of ingredients appear in corpus
         ave = np.zeros((w2v.wv.vector_size,1))
     return ave
 
-
 def find_recommendations(df,input_vec,no_of_recs,checked):
     """Takes user input and outputs next 5 most similar recipes (or least similar if appropriate button clicked)"""
     named_ingredients = input_vec.copy()
-    input_vec = get_average(input_vec)
+    input_vec = get_weighted_average(input_vec,values,weighted = True)
     cossim = [cosine_similarity(input_vec.reshape(1,-1),x.reshape(1,-1))[0][0] for x in df['average']]
     if checked == ['Include ingredients listed']:
         for i,y in enumerate(df['ingredients']):        #prioritises recipes which include inputted ingredients
@@ -96,9 +115,14 @@ def display_url(url):
     url = "<a href='{}' target='_blank'>{}</a>".format(url,url)
     return url
 
+#need to remove words from input in order to use w2v model
+words_to_remove = ['diced','chopped','fresh','crumbled','peeled','approx','bonein','jar','roughly','sifted','chilled','shaved','frozen','cut','thawed','seeded','room','temperature','softened','melted','one','total','taste','breast','thigh','dried','rings','each','teaspoon','bag','drained','plus','needed','cooked','trimmed','piece','boneless','skinless','small','medium','large','sliced','about','cup','tbsp','freshly','cracked','can','strained','rinsed','crushed','tsp','lb','oz','ground','minced','lightly','whisked','chopped','optional','garnish','divided','uncooked','bunch','finely','shredded','cold','quartered']
+
+
 df,w2v = get_data()
 df['url'] = df['url'].apply(display_url)
-ingredient_list = create_suggestions(df)    
+ingredient_list = create_suggestions(df)   
+values = load_tfidf_model(df)
     
 app = Dash(external_stylesheets=[dbc.themes.LUX])
 
